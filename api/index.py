@@ -2,21 +2,12 @@ from flask import Flask, request, render_template_string, jsonify
 import psycopg2
 from psycopg2 import sql
 import os
-from dotenv import load_dotenv
-from flask_cors import CORS
-
-# Load environment variables
-load_dotenv()
 
 app = Flask(__name__)
-CORS(app)
 
+# ---------- Database Connection ----------
 def get_connection():
-    try:
-        return psycopg2.connect(os.getenv("DATABASE_URL"))
-    except Exception as e:
-        print("Database connection failed:", e)
-        return None
+    return psycopg2.connect(os.getenv("DATABASE_URL"), sslmode="require")
 
 # ---------- HTML Frontend ----------
 HTML_TEMPLATE = """
@@ -40,7 +31,7 @@ HTML_TEMPLATE = """
     </form>
 
     {% if videos %}
-        <h3>Results ({{ videos|length }} found):</h3>
+        <h3>Results:</h3>
         <div id="video-container"></div>
 
         <script>
@@ -73,13 +64,7 @@ HTML_TEMPLATE = """
                 video.addEventListener('ended', function onEnded() {
                     if (isHandlingEnd) return;
                     isHandlingEnd = true;
-
                     current++;
-                    if (current >= videos.length) {
-                        hasPlayedAll = true;
-                        container.innerHTML = "<p><b>✅ All videos played once.</b></p>";
-                        return;
-                    }
                     playVideo(current);
                 }, { once: true });
 
@@ -115,38 +100,33 @@ HTML_TEMPLATE = """
 </html>
 """
 
-# ---------- Web Frontend Route ----------
+# ---------- Web Frontend ----------
 @app.route("/", methods=["GET", "POST"])
 def index():
     videos = []
     message = ""
-
+    
     if request.method == "POST":
         user_input = request.form["query"].strip().lower()
         words = [w.replace(" ", "_") for w in user_input.split()]
 
         conn = get_connection()
-        if not conn:
-            return render_template_string(HTML_TEMPLATE, videos=[], message="Database connection failed")
-
         cursor = conn.cursor()
 
         for word in words:
             cursor.execute(sql.SQL("SELECT file_name, cloudinary_url FROM videos WHERE file_name ILIKE %s"), [f"%{word}%"])
-            results = cursor.fetchall()
-            if results:
-                for row in results:
-                    videos.append({"file_name": row[0], "cloudinary_url": row[1]})
+            result = cursor.fetchone()
+            if result:
+                videos.append({"file_name": result[0], "cloudinary_url": result[1]})
             else:
-                message += f"No match for '{word.replace('_',' ')}'. "
+                message += f"No match for '{word.replace('_', ' ')}'. "
 
         cursor.close()
         conn.close()
 
     return render_template_string(HTML_TEMPLATE, videos=videos, message=message)
 
-
-# ---------- Mobile API Route ----------
+# ---------- Mobile API ----------
 @app.route("/api/videos", methods=["POST"])
 def api_videos():
     data = request.get_json()
@@ -159,15 +139,14 @@ def api_videos():
     videos = []
 
     conn = get_connection()
-    if not conn:
-        return jsonify({"error": "Database connection failed"}), 500
-
     cursor = conn.cursor()
+
     for word in words:
         cursor.execute(sql.SQL("SELECT file_name, cloudinary_url FROM videos WHERE file_name ILIKE %s"), [f"%{word}%"])
-        results = cursor.fetchall()
-        for row in results:
-            videos.append({"file_name": row[0], "url": row[1]})
+        result = cursor.fetchone()
+        if result:
+            videos.append({"file_name": result[0], "url": result[1]})
+
     cursor.close()
     conn.close()
 
@@ -176,6 +155,6 @@ def api_videos():
 
     return jsonify({"videos": videos})
 
-
-# ✅ For Vercel deployment
+# ---------- Vercel Serverless Handler ----------
+# This is required for Vercel to recognize the Flask app
 app = app
